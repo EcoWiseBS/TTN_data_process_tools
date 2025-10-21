@@ -13,8 +13,9 @@ import os
 import tempfile
 import shutil
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 import io
+import requests
 
 # Set page configuration
 st.set_page_config(
@@ -209,6 +210,46 @@ def remove_duplicates_from_csv(csv_content, unique_fields=None):
     return deduplicated_content, original_count, unique_count, duplicates_removed
 
 
+def fetch_ttn_data(api_key, duration_hours, application_id):
+    """
+    Fetch data from TTN API using the provided API key and duration.
+    
+    Args:
+        api_key (str): TTN API key
+        duration_hours (int): Duration in hours (1-48)
+        application_id (str): TTN application ID
+        
+    Returns:
+        str: JSON data as string, or None if error
+    """
+    url = f"https://nam1.cloud.thethings.network/api/v3/as/applications/{application_id}/packages/storage/uplink_message"
+    
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "text/event-stream"
+    }
+    
+    params = {
+        "last": f"{duration_hours}h"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, params=params, stream=True)
+        response.raise_for_status()
+        
+        # Read the streaming response
+        data_lines = []
+        for line in response.iter_lines():
+            if line:
+                data_lines.append(line.decode('utf-8'))
+        
+        return '\n'.join(data_lines)
+        
+    except requests.exceptions.RequestException as e:
+        st.error(f"Error fetching data from TTN API: {e}")
+        return None
+
+
 def main():
     """Main Streamlit application."""
     
@@ -219,15 +260,142 @@ def main():
     st.sidebar.title("Navigation")
     app_mode = st.sidebar.selectbox(
         "Choose a tool:",
-        ["TTN Data Processing", "Duplicate Removal", "About"]
+        ["TTN Data Fetching", "TTN Data Processing", "Duplicate Removal", "About"]
     )
     
-    if app_mode == "TTN Data Processing":
+    if app_mode == "TTN Data Fetching":
+        show_data_fetching()
+    elif app_mode == "TTN Data Processing":
         show_data_processing()
     elif app_mode == "Duplicate Removal":
         show_duplicate_removal()
     else:
         show_about()
+
+
+def show_data_fetching():
+    """Show the TTN data fetching interface."""
+    
+    st.markdown('<div class="section-header">📡 TTN Data Fetching</div>', unsafe_allow_html=True)
+    
+    st.markdown("""
+    Fetch data directly from The Things Network (TTN) API using your API key.
+    This tool will retrieve uplink messages from the specified time period.
+    """)
+    
+    # API Key input
+    api_key = st.text_input(
+        "TTN API Key",
+        type="password",
+        help="Enter your TTN API key (starts with NNSXS.)"
+    )
+    
+    # Duration selection
+    duration_options = {
+        "1 hour": 1,
+        "3 hours": 3,
+        "6 hours": 6,
+        "12 hours": 12,
+        "24 hours": 24,
+        "48 hours": 48
+    }
+    
+    duration_label = st.selectbox(
+        "Select time period:",
+        options=list(duration_options.keys()),
+        help="Select how far back to fetch data from"
+    )
+    
+    duration_hours = duration_options[duration_label]
+    
+    # Application ID
+    application_id = st.text_input(
+        "Application ID",
+        help="Enter your TTN application ID"
+    )
+    
+    # Fetch button
+    if st.button("Fetch Data from TTN", type="primary"):
+        if not api_key:
+            st.error("Please enter your TTN API key")
+            return
+        
+        if not application_id:
+            st.error("Please enter your TTN application ID")
+            return
+        
+        if not api_key.startswith("NNSXS."):
+            st.warning("API key should start with 'NNSXS.' - please verify your key")
+        
+        with st.spinner(f'Fetching data from last {duration_label}...'):
+            json_data = fetch_ttn_data(api_key, duration_hours, application_id)
+        
+        if json_data:
+            # Process the fetched data
+            device_data = parse_json_data(json_data)
+            
+            if device_data:
+                csv_files = create_csv_files(device_data)
+                
+                # Display results
+                st.markdown('<div class="success-box">', unsafe_allow_html=True)
+                st.success(f"✅ Successfully fetched and processed data for {len(device_data)} devices!")
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+                # Show summary
+                st.subheader("Fetched Data Summary")
+                
+                summary_markdown = "| Device ID | Records | CSV File |\n"
+                summary_markdown += "|-----------|---------|----------|\n"
+                
+                for device_id, records in device_data.items():
+                    summary_markdown += f"| {device_id} | {len(records)} | {device_id}_data.csv |\n"
+                
+                st.markdown(summary_markdown)
+                
+                # Download buttons for each CSV file
+                st.subheader("Download Processed CSV Files")
+                
+                cols = st.columns(3)
+                for idx, (device_id, csv_content) in enumerate(csv_files.items()):
+                    col_idx = idx % 3
+                    with cols[col_idx]:
+                        filename = f"{device_id}_data.csv"
+                        st.download_button(
+                            label=f"Download {filename}",
+                            data=csv_content,
+                            file_name=filename,
+                            mime="text/csv",
+                            key=f"fetch_download_{device_id}"
+                        )
+                
+                # Download all files as ZIP
+                if len(csv_files) > 1:
+                    st.subheader("Download All Files")
+                    
+                    with tempfile.TemporaryDirectory() as temp_dir:
+                        zip_path = os.path.join(temp_dir, "fetched_data.zip")
+                        
+                        with st.spinner('Creating ZIP file...'):
+                            for device_id, csv_content in csv_files.items():
+                                file_path = os.path.join(temp_dir, f"{device_id}_data.csv")
+                                with open(file_path, 'w') as f:
+                                    f.write(csv_content)
+                            
+                            shutil.make_archive(zip_path.replace('.zip', ''), 'zip', temp_dir)
+                            
+                            with open(zip_path, 'rb') as f:
+                                zip_data = f.read()
+                        
+                        st.download_button(
+                            label="📦 Download All Files as ZIP",
+                            data=zip_data,
+                            file_name="fetched_data.zip",
+                            mime="application/zip",
+                            key="fetch_download_all"
+                        )
+            else:
+                st.warning("No data found for the specified time period.")
 
 
 def show_data_processing():
@@ -466,6 +634,12 @@ def show_about():
     
     ### Features
     
+    **📡 TTN Data Fetching**
+    - Fetch data directly from TTN API using your API key
+    - Select time period from 1 hour to 48 hours
+    - Process fetched data into CSV files automatically
+    - Download individual CSV files or all files as ZIP
+    
     **📥 TTN Data Processing**
     - Upload TTN JSON data files (one JSON object per line)
     - Process data into separate CSV files for each device
@@ -478,8 +652,9 @@ def show_about():
     
     ### How to Use
     
-    1. **TTN Data Processing**: Upload your TTN JSON export file to create separate CSV files for each device
-    2. **Duplicate Removal**: Upload CSV files to remove duplicate records based on selected fields
+    1. **TTN Data Fetching**: Enter your TTN API key and select time period to fetch data directly from TTN
+    2. **TTN Data Processing**: Upload your TTN JSON export file to create separate CSV files for each device
+    3. **Duplicate Removal**: Upload CSV files to remove duplicate records based on selected fields
     
     ### Technical Details
     

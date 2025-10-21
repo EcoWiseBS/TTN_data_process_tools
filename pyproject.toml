@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ttn-data-processing-app"
-version = "1.0.0"
+version = "1.0.1"
 description = "Streamlit web application for TTN data processing and duplicate removal"
 authors = ["Your Name <your.email@example.com>"]
 readme = "README.md"
@@ -8,9 +8,13 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = ">=3.8,<3.9.7 || >3.9.7,<4.0"
 streamlit = "^1.28.0"
+requests = "^2.31.0"
 
 [tool.poetry.group.dev.dependencies]
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+test-app = "streamlit run app.py"
