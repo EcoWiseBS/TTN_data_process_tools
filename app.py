@@ -12,6 +12,7 @@ import csv
 import os
 import tempfile
 import shutil
+import zipfile
 from collections import defaultdict
 from datetime import datetime, timedelta
 import io
@@ -373,27 +374,27 @@ def show_data_fetching():
                 if len(csv_files) > 1:
                     st.subheader("Download All Files")
                     
-                    with tempfile.TemporaryDirectory() as temp_dir:
-                        zip_path = os.path.join(temp_dir, "fetched_data.zip")
-                        
-                        with st.spinner('Creating ZIP file...'):
+                    with st.spinner('Creating ZIP file...'):
+                        # Create ZIP file in memory
+                        zip_buffer = io.BytesIO()
+                        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                            # Add all CSV files
                             for device_id, csv_content in csv_files.items():
-                                file_path = os.path.join(temp_dir, f"{device_id}_data.csv")
-                                with open(file_path, 'w') as f:
-                                    f.write(csv_content)
+                                filename = f"{device_id}_data.csv"
+                                zip_file.writestr(filename, csv_content)
                             
-                            shutil.make_archive(zip_path.replace('.zip', ''), 'zip', temp_dir)
-                            
-                            with open(zip_path, 'rb') as f:
-                                zip_data = f.read()
+                            # Add the original JSON data
+                            zip_file.writestr("original_data.json", json_data)
                         
-                        st.download_button(
-                            label="📦 Download All Files as ZIP",
-                            data=zip_data,
-                            file_name="fetched_data.zip",
-                            mime="application/zip",
-                            key="fetch_download_all"
-                        )
+                        zip_data = zip_buffer.getvalue()
+                    
+                    st.download_button(
+                        label="📦 Download All Files as ZIP",
+                        data=zip_data,
+                        file_name="fetched_data.zip",
+                        mime="application/zip",
+                        key="fetch_download_all"
+                    )
             else:
                 st.warning("No data found for the specified time period.")
 
@@ -461,31 +462,27 @@ def show_data_processing():
         if len(csv_files) > 1:
             st.subheader("Download All Files")
             
-            # Create a temporary directory and zip file
-            with tempfile.TemporaryDirectory() as temp_dir:
-                zip_path = os.path.join(temp_dir, "processed_data.zip")
-                
-                with st.spinner('Creating ZIP file...'):
-                    # Write all CSV files to temp directory
+            with st.spinner('Creating ZIP file...'):
+                # Create ZIP file in memory
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                    # Add all CSV files
                     for device_id, csv_content in csv_files.items():
-                        file_path = os.path.join(temp_dir, f"{device_id}_data.csv")
-                        with open(file_path, 'w') as f:
-                            f.write(csv_content)
+                        filename = f"{device_id}_data.csv"
+                        zip_file.writestr(filename, csv_content)
                     
-                    # Create ZIP file
-                    shutil.make_archive(zip_path.replace('.zip', ''), 'zip', temp_dir)
-                    
-                    # Read ZIP file for download
-                    with open(zip_path, 'rb') as f:
-                        zip_data = f.read()
+                    # Add the original JSON data
+                    zip_file.writestr("original_data.json", json_content)
                 
-                st.download_button(
-                    label="📦 Download All Files as ZIP",
-                    data=zip_data,
-                    file_name="processed_data.zip",
-                    mime="application/zip",
-                    key="download_all"
-                )
+                zip_data = zip_buffer.getvalue()
+            
+            st.download_button(
+                label="📦 Download All Files as ZIP",
+                data=zip_data,
+                file_name="processed_data.zip",
+                mime="application/zip",
+                key="download_all"
+            )
 
 
 def show_duplicate_removal():
