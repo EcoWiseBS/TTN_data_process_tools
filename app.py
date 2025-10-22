@@ -211,6 +211,79 @@ def remove_duplicates_from_csv(csv_content, unique_fields=None):
     return deduplicated_content, original_count, unique_count, duplicates_removed
 
 
+def remove_duplicates_from_json(json_content, unique_fields=None):
+    """
+    Remove duplicate records from JSON content (TTN format - one JSON object per line).
+    
+    Args:
+        json_content (str): JSON content as string (one JSON object per line)
+        unique_fields (list): List of field paths to use for duplicate detection
+        
+    Returns:
+        tuple: (deduplicated_json_content, original_count, unique_count, duplicates_removed)
+    """
+    if unique_fields is None:
+        unique_fields = ['device_id', 'received_at']
+    
+    seen_records = set()
+    unique_records = []
+    total_count = 0
+    duplicates_removed = 0
+    
+    lines = json_content.strip().split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        total_count += 1
+        
+        try:
+            data = json.loads(line)
+            result = data.get('result', {})
+            
+            # Extract key fields for duplicate detection
+            key_parts = []
+            for field in unique_fields:
+                if field == 'device_id':
+                    end_device_ids = result.get('end_device_ids', {})
+                    value = end_device_ids.get('device_id', 'unknown')
+                elif field == 'received_at':
+                    value = result.get('received_at', '')
+                elif field == 'f_cnt':
+                    uplink_message = result.get('uplink_message', {})
+                    value = uplink_message.get('f_cnt', '')
+                elif field == 'f_port':
+                    uplink_message = result.get('uplink_message', {})
+                    value = uplink_message.get('f_port', '')
+                else:
+                    # Try to get the field directly from result
+                    value = result.get(field, '')
+                
+                key_parts.append(str(value))
+            
+            # Create unique identifier for this record
+            record_key = '|'.join(key_parts)
+            
+            if record_key not in seen_records:
+                seen_records.add(record_key)
+                unique_records.append(data)
+            else:
+                duplicates_removed += 1
+                
+        except json.JSONDecodeError as e:
+            # Skip invalid JSON lines but count them as processed
+            continue
+    
+    unique_count = len(unique_records)
+    
+    # Create deduplicated JSON content
+    deduplicated_content = '\n'.join(json.dumps(record) for record in unique_records)
+    
+    return deduplicated_content, total_count, unique_count, duplicates_removed
+
+
 def fetch_ttn_data(api_key, duration_hours, application_id):
     """
     Fetch data from TTN API using the provided API key and duration.
@@ -261,15 +334,17 @@ def main():
     st.sidebar.title("Navigation")
     app_mode = st.sidebar.selectbox(
         "Choose a tool:",
-        ["TTN Data Fetching", "TTN Data Processing", "Duplicate Removal", "About"]
+        ["TTN Data Fetching", "TTN Data Processing", "CSV Duplicate Removal", "JSON Duplicate Removal", "About"]
     )
     
     if app_mode == "TTN Data Fetching":
         show_data_fetching()
     elif app_mode == "TTN Data Processing":
         show_data_processing()
-    elif app_mode == "Duplicate Removal":
-        show_duplicate_removal()
+    elif app_mode == "CSV Duplicate Removal":
+        show_csv_duplicate_removal()
+    elif app_mode == "JSON Duplicate Removal":
+        show_json_duplicate_removal()
     else:
         show_about()
 
@@ -485,10 +560,10 @@ def show_data_processing():
             )
 
 
-def show_duplicate_removal():
-    """Show the duplicate removal interface."""
+def show_csv_duplicate_removal():
+    """Show the CSV duplicate removal interface."""
     
-    st.markdown('<div class="section-header">🔍 Duplicate Removal Tool</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">🔍 CSV Duplicate Removal Tool</div>', unsafe_allow_html=True)
     
     st.markdown("""
     Upload CSV files to remove duplicate records. The tool will identify duplicates based on
@@ -619,6 +694,140 @@ def show_duplicate_removal():
                         )
 
 
+def show_json_duplicate_removal():
+    """Show the JSON duplicate removal interface."""
+    
+    st.markdown('<div class="section-header">🔍 JSON Duplicate Removal Tool</div>', unsafe_allow_html=True)
+    
+    st.markdown("""
+    Upload JSON files (TTN format - one JSON object per line) to remove duplicate records. 
+    The tool will identify duplicates based on device_id and received_at timestamp.
+    """)
+    
+    # File upload
+    uploaded_files = st.file_uploader(
+        "Upload JSON files",
+        type=['json', 'txt'],
+        accept_multiple_files=True,
+        help="Upload one or more JSON files (TTN format) to remove duplicates from"
+    )
+    
+    if uploaded_files:
+        # Configuration
+        st.subheader("Configuration")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            unique_fields = st.multiselect(
+                "Fields to use for duplicate detection:",
+                options=['device_id', 'received_at', 'f_cnt', 'f_port'],
+                default=['device_id', 'received_at'],
+                help="Select the fields that uniquely identify a record"
+            )
+        
+        with col2:
+            create_backup = st.checkbox(
+                "Create backup of original files",
+                value=True,
+                help="Download original files alongside deduplicated versions"
+            )
+        
+        if not unique_fields:
+            st.warning("Please select at least one field for duplicate detection.")
+            return
+        
+        # Process files
+        if st.button("Remove Duplicates", type="primary"):
+            total_original = 0
+            total_unique = 0
+            total_duplicates = 0
+            processed_files = {}
+            
+            with st.spinner('Removing duplicates...'):
+                for uploaded_file in uploaded_files:
+                    # Read JSON content
+                    json_content = uploaded_file.read().decode('utf-8')
+                    
+                    # Remove duplicates
+                    deduplicated_content, original_count, unique_count, duplicates_removed = remove_duplicates_from_json(
+                        json_content, unique_fields
+                    )
+                    
+                    # Store results
+                    processed_files[uploaded_file.name] = {
+                        'original': json_content,
+                        'deduplicated': deduplicated_content,
+                        'original_count': original_count,
+                        'unique_count': unique_count,
+                        'duplicates_removed': duplicates_removed
+                    }
+                    
+                    # Update totals
+                    total_original += original_count
+                    total_unique += unique_count
+                    total_duplicates += duplicates_removed
+            
+            # Display results
+            st.markdown('<div class="success-box">', unsafe_allow_html=True)
+            st.success(f"✅ Successfully processed {len(uploaded_files)} files!")
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Show detailed results
+            st.subheader("Processing Results")
+            
+            # Display results as markdown table instead of using st.table()
+            results_markdown = "| File | Original Records | Unique Records | Duplicates Removed |\n"
+            results_markdown += "|------|-----------------|---------------|-------------------|\n"
+            
+            for filename, data in processed_files.items():
+                results_markdown += f"| {filename} | {data['original_count']} | {data['unique_count']} | {data['duplicates_removed']} |\n"
+            
+            st.markdown(results_markdown)
+            
+            # Summary
+            st.subheader("Summary")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Total Original Records", total_original)
+            with col2:
+                st.metric("Total Unique Records", total_unique)
+            with col3:
+                st.metric("Total Duplicates Removed", total_duplicates)
+            
+            # Download processed files
+            st.subheader("Download Processed Files")
+            
+            for filename, data in processed_files.items():
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    st.write(f"**{filename}**")
+                    st.write(f"Original: {data['original_count']} records → Deduplicated: {data['unique_count']} records")
+                
+                with col2:
+                    # Download deduplicated file
+                    deduplicated_filename = f"deduplicated_{filename}"
+                    st.download_button(
+                        label="Download",
+                        data=data['deduplicated'],
+                        file_name=deduplicated_filename,
+                        mime="application/json",
+                        key=f"dedup_{filename}"
+                    )
+                    
+                    # Download original file (if backup requested)
+                    if create_backup:
+                        st.download_button(
+                            label="Original",
+                            data=data['original'],
+                            file_name=filename,
+                            mime="application/json",
+                            key=f"orig_{filename}"
+                        )
+
+
 def show_about():
     """Show the about page."""
     
@@ -642,16 +851,22 @@ def show_about():
     - Process data into separate CSV files for each device
     - Download individual CSV files or all files as ZIP
     
-    **🔍 Duplicate Removal Tool**
+    **🔍 CSV Duplicate Removal Tool**
     - Upload CSV files to remove duplicate records
     - Customizable duplicate detection fields
     - Download original and deduplicated files
+    
+    **🔍 JSON Duplicate Removal Tool**
+    - Upload JSON files (TTN format) to remove duplicate records
+    - Remove duplicates based on device_id and received_at timestamp
+    - Download original and deduplicated JSON files
     
     ### How to Use
     
     1. **TTN Data Fetching**: Enter your TTN API key and select time period to fetch data directly from TTN
     2. **TTN Data Processing**: Upload your TTN JSON export file to create separate CSV files for each device
-    3. **Duplicate Removal**: Upload CSV files to remove duplicate records based on selected fields
+    3. **CSV Duplicate Removal**: Upload CSV files to remove duplicate records based on selected fields
+    4. **JSON Duplicate Removal**: Upload JSON files to remove duplicate records based on device_id and timestamp
     
     ### Technical Details
     
